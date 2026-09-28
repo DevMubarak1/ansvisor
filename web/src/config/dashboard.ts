@@ -51,6 +51,7 @@ export const dashboardNav: NavGroup[] = [
         title: 'Action Center',
         href: '/dashboard/action-center',
         icon: Target,
+        badge: 'New',
       },
     ],
   },
