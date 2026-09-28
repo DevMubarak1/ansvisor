@@ -12,7 +12,6 @@ const PlatformVolumeChart = dynamic(() => import('./_charts').then((m) => m.Plat
   ssr: false,
   loading: () => <Skeleton className="h-64 w-full" />,
 });
-import { SuggestionsCard } from './_suggestions-card';
 import { QueryFanoutTab } from './_fanout-tab';
 import { INTENT_LABELS, INTENT_COLORS } from '@/config/intent-labels';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -100,7 +99,7 @@ import {
 import { DateRangeFilter } from '@/components/filters/date-range-filter';
 import { getBrandFilterOptions } from '@/lib/actions/tracking';
 import { formatRegionDisplay } from '@/lib/region';
-import { DataSourcesPanel } from './_data-sources-panel';
+import { SuggestionsTab } from './_suggestions-tab';
 import { PLANS } from '@/config/plans';
 import { getTopics } from '@/lib/actions/topic';
 import { analyzeNewPrompt, type PromptVisibilitySummary } from '@/lib/actions/tracking';
@@ -1573,8 +1572,7 @@ export default function PromptsPage() {
           {view === 'suggestions' ? (
             activeBrandId && (
               <>
-                <DataSourcesPanel brandId={activeBrandId} />
-                <SuggestionsCard brandId={activeBrandId} onAccepted={loadData} />
+                <SuggestionsTab brandId={activeBrandId} onAccepted={loadData} />
               </>
             )
           ) : (

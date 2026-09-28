@@ -20,6 +20,7 @@ import {
   Search as SearchIcon,
   Trash2,
   BarChart3,
+  Clock,
 } from 'lucide-react';
 import { Filter } from 'lucide-react';
 import { Input } from '@/components/ui/input';
@@ -31,6 +32,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
+import { cn } from '@/lib/utils';
 import {
   getPromptSuggestions,
   refreshPromptSuggestions,
@@ -44,6 +46,7 @@ import {
   type GaSuggestionSourceData,
   type GscSuggestionBadge,
 } from '@/lib/prompt-suggestion-source';
+import type { SuggestionSourceStates } from '@/lib/actions/integrations';
 
 /**
  * Analytics evidence, in the customer's own numbers (#705). A blind spot is
@@ -202,9 +205,52 @@ const SOURCE_FILTER_LABELS: Record<SourceFilter, string> = {
 interface Props {
   brandId: string;
   onAccepted?: () => void;
+  /** Connected sources and whether their data has landed; null when unknown. */
+  sourceStates: SuggestionSourceStates | null;
 }
 
-export function SuggestionsCard({ brandId, onAccepted }: Props) {
+const SOURCE_NAMES = { gsc: 'Search Console', ga: 'Analytics' } as const;
+
+function joinNames(names: string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0];
+}
+
+/**
+ * What to tell the reader about their own data sources, if anything:
+ *  - `waiting`: a mapped source whose first sync has not landed yet, so
+ *    nothing it knows can be in the list.
+ *  - `ready`: the data has landed since these suggestions were generated, and
+ *    none of them came from it — generating again would use it.
+ * A source whose data predates the list but contributed nothing is left
+ * alone: the list already had its chance at it (thin data, or all covered).
+ */
+function sourceNotice(
+  states: SuggestionSourceStates | null,
+  suggestions: PromptSuggestion[],
+): { kind: 'waiting' | 'ready'; names: string[] } | null {
+  if (!states) return null;
+  const latestGenerated = Math.max(0, ...suggestions.map((s) => Date.parse(s.generatedAt)));
+  const waiting: string[] = [];
+  const ready: string[] = [];
+  for (const key of ['gsc', 'ga'] as const) {
+    const state = states[key];
+    if (!state.configured || !state.connected || !state.mapped) continue;
+    if (!state.firstDataAt) {
+      waiting.push(SOURCE_NAMES[key]);
+    } else if (
+      suggestions.length > 0 &&
+      latestGenerated < Date.parse(state.firstDataAt) &&
+      !suggestions.some((s) => s.source === key)
+    ) {
+      ready.push(SOURCE_NAMES[key]);
+    }
+  }
+  if (ready.length > 0) return { kind: 'ready', names: ready };
+  if (waiting.length > 0) return { kind: 'waiting', names: waiting };
+  return null;
+}
+
+export function SuggestionsCard({ brandId, onAccepted, sourceStates }: Props) {
   const [suggestions, setSuggestions] = useState<PromptSuggestion[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -277,6 +323,11 @@ export function SuggestionsCard({ brandId, onAccepted }: Props) {
       );
     });
   }, [suggestions, sourceFilter, search]);
+
+  const notice = useMemo(
+    () => sourceNotice(sourceStates, suggestions),
+    [sourceStates, suggestions],
+  );
 
   /**
    * Dismiss everything on screen. Kept to what is actually listed rather than
@@ -423,6 +474,42 @@ export function SuggestionsCard({ brandId, onAccepted }: Props) {
         </div>
       </CardHeader>
       <CardContent>
+        {loaded && !loading && !error && notice && (
+          <div
+            className={cn(
+              'mb-4 flex flex-col gap-3 rounded-lg border px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between',
+              notice.kind === 'ready' ? 'border-primary/30 bg-primary/5' : 'bg-muted/30',
+            )}
+          >
+            <div className="flex items-start gap-2.5">
+              {notice.kind === 'ready' ? (
+                <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              ) : (
+                <Clock className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
+              <p className={notice.kind === 'ready' ? '' : 'text-muted-foreground'}>
+                {notice.kind === 'ready'
+                  ? `Your ${joinNames(notice.names)} data is ready. These suggestions were generated before it arrived — generate new ones to include it.`
+                  : `${joinNames(notice.names)} is connected and its first sync is in progress. Suggestions from it will be available once it finishes, usually within a few minutes.`}
+              </p>
+            </div>
+            {notice.kind === 'ready' && (
+              <Button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                size="sm"
+                className="shrink-0 gap-2"
+              >
+                {refreshing ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
+                {refreshing ? 'Generating…' : 'Generate new suggestions'}
+              </Button>
+            )}
+          </div>
+        )}
         {loading ? (
           <div className="flex items-center justify-center py-10">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />

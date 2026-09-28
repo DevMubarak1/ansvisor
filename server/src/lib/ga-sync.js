@@ -410,9 +410,10 @@ async function prune(table) {
 
 /**
  * Sync every eligible brand; optionally scoped to one organization (the
- * manual trigger). Returns per-brand counts.
+ * manual trigger) or to one brand (right after its property is mapped).
+ * Returns per-brand counts.
  */
-export async function runGaSync({ organizationId } = {}) {
+export async function runGaSync({ organizationId, brandId } = {}) {
   if (!isComposioConfigured('google-analytics')) return { synced: 0, skipped: 0, results: [] };
 
   // Orgs with a live connection…
@@ -428,12 +429,14 @@ export async function runGaSync({ organizationId } = {}) {
   if (connectedOrgIds.length === 0) return { synced: 0, skipped: 0, results: [] };
 
   // …and their active brands with a mapped property.
-  const { data: brands, error: brandError } = await supabaseAdmin
+  let brandQuery = supabaseAdmin
     .from('brands')
     .select('id, organization_id, ga_property_id')
     .eq('is_active', true)
     .not('ga_property_id', 'is', null)
     .in('organization_id', connectedOrgIds);
+  if (brandId) brandQuery = brandQuery.eq('id', brandId);
+  const { data: brands, error: brandError } = await brandQuery;
   if (brandError) throw new Error(brandError.message);
 
   const results = [];
@@ -451,8 +454,11 @@ export async function runGaSync({ organizationId } = {}) {
     }
   }
 
-  for (const table of ['ga_ai_traffic_stats', 'ga_page_stats', 'ga_item_stats']) {
-    await prune(table);
+  // Retention is table-wide, so a single-brand sync leaves it to the daily run.
+  if (!brandId) {
+    for (const table of ['ga_ai_traffic_stats', 'ga_page_stats', 'ga_item_stats']) {
+      await prune(table);
+    }
   }
 
   logger.info({ synced, skipped, total: (brands || []).length }, '[ga-sync] completed');

@@ -86,9 +86,10 @@ async function syncBrand(brand) {
 
 /**
  * Sync every eligible brand; optionally scoped to one organization (the
- * manual trigger). Returns per-brand counts.
+ * manual trigger) or to one brand (right after its property is mapped).
+ * Returns per-brand counts.
  */
-export async function runGscSync({ organizationId } = {}) {
+export async function runGscSync({ organizationId, brandId } = {}) {
   if (!isComposioConfigured('google-search-console')) return { synced: 0, skipped: 0, results: [] };
 
   // Orgs with a live connection…
@@ -104,12 +105,14 @@ export async function runGscSync({ organizationId } = {}) {
   if (connectedOrgIds.length === 0) return { synced: 0, skipped: 0, results: [] };
 
   // …and their active brands with a mapped property.
-  const { data: brands, error: brandError } = await supabaseAdmin
+  let brandQuery = supabaseAdmin
     .from('brands')
     .select('id, organization_id, gsc_property')
     .eq('is_active', true)
     .not('gsc_property', 'is', null)
     .in('organization_id', connectedOrgIds);
+  if (brandId) brandQuery = brandQuery.eq('id', brandId);
+  const { data: brands, error: brandError } = await brandQuery;
   if (brandError) throw new Error(brandError.message);
 
   const results = [];
@@ -128,13 +131,16 @@ export async function runGscSync({ organizationId } = {}) {
   }
 
   // Retention (#648): the suggestion pipeline reads a 28-day window; 90 days
-  // keeps room for trend features without unbounded growth.
-  const { error: pruneError } = await supabaseAdmin
-    .from('gsc_query_stats')
-    .delete()
-    .lt('date', utcDateString(90));
-  if (pruneError) {
-    logger.warn({ err: pruneError }, '[gsc-sync] retention prune failed');
+  // keeps room for trend features without unbounded growth. Table-wide, so a
+  // single-brand sync leaves it to the daily run.
+  if (!brandId) {
+    const { error: pruneError } = await supabaseAdmin
+      .from('gsc_query_stats')
+      .delete()
+      .lt('date', utcDateString(90));
+    if (pruneError) {
+      logger.warn({ err: pruneError }, '[gsc-sync] retention prune failed');
+    }
   }
 
   logger.info({ synced, skipped, total: (brands || []).length }, '[gsc-sync] completed');

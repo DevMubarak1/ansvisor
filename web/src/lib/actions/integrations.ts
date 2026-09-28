@@ -53,9 +53,20 @@ export async function getIntegrationStatus(
  * for a few minutes is a better failure than a second of blank space on every
  * visit.
  */
+export interface SourceState {
+  configured: boolean;
+  connected: boolean;
+  mapped: boolean;
+  /**
+   * When this brand's first synced row landed, or null when nothing has been
+   * synced yet. Suggestions generated before it could not draw on the source.
+   */
+  firstDataAt: string | null;
+}
+
 export interface SuggestionSourceStates {
-  gsc: { configured: boolean; connected: boolean; mapped: boolean };
-  ga: { configured: boolean; connected: boolean; mapped: boolean };
+  gsc: SourceState;
+  ga: SourceState;
   dataForSeo: { configured: boolean };
 }
 
@@ -68,7 +79,16 @@ export async function getSuggestionSourceStates(brandId: string): Promise<Sugges
     dataForSeo?: boolean;
   }
 
-  const [configRes, brandRes, connRes] = await Promise.all([
+  const firstRow = (table: 'gsc_query_stats' | 'ga_page_stats') =>
+    supabase
+      .from(table)
+      .select('created_at')
+      .eq('brand_id', brandId)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+  const [configRes, brandRes, connRes, gscFirst, gaFirst] = await Promise.all([
     fetch(`${API_BASE_URL}/api/integrations/config`, {
       headers: await authHeaders(),
       cache: 'no-store',
@@ -77,6 +97,8 @@ export async function getSuggestionSourceStates(brandId: string): Promise<Sugges
       .catch(() => ({}) as ConfigBody),
     supabase.from('brands').select('gsc_property, ga_property_id').eq('id', brandId).maybeSingle(),
     supabase.from('integration_connections').select('provider, status'),
+    firstRow('gsc_query_stats'),
+    firstRow('ga_page_stats'),
   ]);
 
   const connected = new Set(
@@ -88,11 +110,13 @@ export async function getSuggestionSourceStates(brandId: string): Promise<Sugges
       configured: Boolean(configRes.googleSearchConsole),
       connected: connected.has('google-search-console'),
       mapped: Boolean(brandRes.data?.gsc_property),
+      firstDataAt: gscFirst.data?.created_at ?? null,
     },
     ga: {
       configured: Boolean(configRes.googleAnalytics),
       connected: connected.has('google-analytics'),
       mapped: Boolean(brandRes.data?.ga_property_id),
+      firstDataAt: gaFirst.data?.created_at ?? null,
     },
     dataForSeo: { configured: Boolean(configRes.dataForSeo) },
   };
@@ -122,6 +146,24 @@ export async function disconnectIntegration(provider: IntegrationProvider): Prom
 }
 
 // ─── Property mapping (#642) ─────────────────────────────────────────────────
+
+/**
+ * Start a freshly mapped brand's first sync. Without it the data only lands
+ * with the nightly run, and suggestions generated in the meantime cannot draw
+ * on it. The server answers at once and syncs in the background. Best effort:
+ * the property pick is already saved, and the nightly run is the fallback.
+ */
+async function startBrandSync(provider: IntegrationProvider, brandId: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/integrations/${provider}/sync`, {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify({ brandId }),
+    });
+  } catch {
+    // The nightly sync picks the brand up.
+  }
+}
 
 export interface GscProperty {
   siteUrl: string;
@@ -169,6 +211,7 @@ export async function setBrandGscProperty(brandId: string, property: string | nu
     .update({ gsc_property: property })
     .eq('id', brandId);
   if (error) throw new Error(error.message);
+  if (property) await startBrandSync('google-search-console', brandId);
 }
 
 // ─── Google Analytics property mapping (#694) ────────────────────────────────
@@ -226,4 +269,5 @@ export async function setBrandGaProperty(
     .update({ ga_property_id: propertyId })
     .eq('id', brandId);
   if (error) throw new Error(error.message);
+  if (propertyId) await startBrandSync('google-analytics', brandId);
 }
