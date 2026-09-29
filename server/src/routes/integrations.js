@@ -12,6 +12,7 @@ import {
 } from '../lib/composio.js';
 import { runGscSync } from '../lib/gsc-sync.js';
 import { runGaSync } from '../lib/ga-sync.js';
+import { assertBrandAccess } from '../lib/access.js';
 
 const router = Router();
 
@@ -271,10 +272,32 @@ router.get('/google-search-console/properties', async (req, res) => {
   }
 });
 
+// Brand syncs started from the web app right after a property is mapped.
+// Picking a property twice in quick succession must not run the same brand's
+// sync twice at once.
+const inFlightBrandSyncs = new Set();
+
+/**
+ * Start one brand's sync without holding the request open: answer 202 at once
+ * and leave the outcome to the log. A freshly mapped property otherwise has no
+ * data until the nightly run, and suggestions built before then cannot use it.
+ */
+function startBrandSync(req, res, provider, brandId, run) {
+  const key = `${provider}:${brandId}`;
+  if (inFlightBrandSyncs.has(key)) return res.status(202).json({ started: false });
+  inFlightBrandSyncs.add(key);
+  run({ brandId })
+    .then((result) => req.log.info({ provider, brandId, result }, 'integrations brand sync done'))
+    .catch((err) => req.log.error({ err, provider, brandId }, 'integrations brand sync failed'))
+    .finally(() => inFlightBrandSyncs.delete(key));
+  return res.status(202).json({ started: true });
+}
+
 /**
  * POST /api/integrations/google-search-console/sync
  * Runs the query-stats sync for the caller's org immediately (#644) —
  * testing and first-time backfill; the daily cycle runs the same sync.
+ * With `{ brandId }` in the body it syncs that brand only, in the background.
  */
 router.post('/google-search-console/sync', async (req, res) => {
   try {
@@ -283,6 +306,12 @@ router.post('/google-search-console/sync', async (req, res) => {
     const profile = await getProfile(req.user.id);
     if (!WRITE_ROLES.includes(profile.role)) {
       return res.status(403).json({ error: 'Only admins and managers can trigger a sync.' });
+    }
+
+    const brandId = req.body?.brandId;
+    if (brandId) {
+      await assertBrandAccess(brandId, req.user.id);
+      return startBrandSync(req, res, GSC, brandId, runGscSync);
     }
 
     const result = await runGscSync({ organizationId: profile.organization_id });
@@ -321,7 +350,8 @@ router.get('/google-analytics/properties', async (req, res) => {
 /**
  * POST /api/integrations/google-analytics/sync
  * Runs the traffic sync for the caller's org immediately (#704) — testing and
- * first-time backfill; the daily cycle runs the same sync.
+ * first-time backfill; the daily cycle runs the same sync. With `{ brandId }`
+ * in the body it syncs that brand only, in the background.
  */
 router.post('/google-analytics/sync', async (req, res) => {
   try {
@@ -330,6 +360,12 @@ router.post('/google-analytics/sync', async (req, res) => {
     const profile = await getProfile(req.user.id);
     if (!WRITE_ROLES.includes(profile.role)) {
       return res.status(403).json({ error: 'Only admins and managers can trigger a sync.' });
+    }
+
+    const brandId = req.body?.brandId;
+    if (brandId) {
+      await assertBrandAccess(brandId, req.user.id);
+      return startBrandSync(req, res, GA, brandId, runGaSync);
     }
 
     const result = await runGaSync({ organizationId: profile.organization_id });

@@ -1,10 +1,23 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link } from '@/i18n/navigation';
 import { buttonVariants } from '@/components/ui/button-variants';
-import { BarChart3, Check, ExternalLink, Lock, Radar, Search, Sparkles, X } from 'lucide-react';
-import { getSuggestionSourceStates } from '@/lib/actions/integrations';
+import {
+  BarChart3,
+  Check,
+  Clock,
+  ExternalLink,
+  Lock,
+  Radar,
+  Search,
+  Sparkles,
+  X,
+} from 'lucide-react';
+import type {
+  SourceState as SourceStatus,
+  SuggestionSourceStates,
+} from '@/lib/actions/integrations';
 
 /**
  * What feeds this brand's suggestions, and what could (#659).
@@ -16,10 +29,16 @@ import { getSuggestionSourceStates } from '@/lib/actions/integrations';
  *
  * A source only counts as connected when the org is linked AND this brand is
  * mapped to a property. Connected-but-unmapped silently produces nothing, so
- * it gets its own wording rather than a tick.
+ * it gets its own wording rather than a tick — and so does mapped-but-not-yet-
+ * synced, which produces nothing until its first sync lands.
  */
 
-type SourceState = 'not_configured' | 'not_connected' | 'connected_unmapped' | 'feeding';
+type SourceState =
+  | 'not_configured'
+  | 'not_connected'
+  | 'connected_unmapped'
+  | 'awaiting_data'
+  | 'feeding';
 
 interface Source {
   key: string;
@@ -67,8 +86,12 @@ function SourceMark({ source }: { source: Source }) {
   );
 }
 
-export function DataSourcesPanel({ brandId }: { brandId: string }) {
-  const [sources, setSources] = useState<Source[] | null>(null);
+export function DataSourcesPanel({
+  states,
+}: {
+  /** undefined while loading, null when the read failed. */
+  states: SuggestionSourceStates | null | undefined;
+}) {
   // Read during the initial render rather than from an effect: setting it in
   // an effect dismisses on a second pass, so a previously hidden panel flashes
   // into view before disappearing again.
@@ -81,66 +104,54 @@ export function DataSourcesPanel({ brandId }: { brandId: string }) {
     }
   });
 
-  useEffect(() => {
-    let cancelled = false;
-
-    getSuggestionSourceStates(brandId)
-      .then((states) => {
-        if (cancelled) return;
-        const stateOf = (s: { configured: boolean; connected: boolean; mapped: boolean }) =>
-          !s.configured
-            ? ('not_configured' as const)
-            : !s.connected
-              ? ('not_connected' as const)
-              : s.mapped
-                ? ('feeding' as const)
-                : ('connected_unmapped' as const);
-        const gsc = stateOf(states.gsc);
-        const ga = stateOf(states.ga);
-        const dataForSeo = states.dataForSeo.configured;
-        setSources([
-          {
-            key: 'gsc',
-            name: 'Google Search Console',
-            blurb: 'See query and impression data to find high-opportunity prompts.',
-            logo: '/google-search-console.svg',
-            icon: Search,
-            iconClass: 'text-blue-500',
-            state: gsc,
-            connectable: true,
-          },
-          {
-            key: 'ga',
-            name: 'Google Analytics (GA4)',
-            blurb: 'Understand user intent and behaviour to uncover relevant prompts.',
-            logo: '/google-analytics.svg',
-            icon: BarChart3,
-            iconClass: 'text-amber-500',
-            state: ga,
-            connectable: true,
-          },
-          {
-            key: 'dataforseo',
-            name: 'DataForSEO',
-            blurb: 'Uncover keyword and SERP data to find content gaps.',
-            logo: '/dataforseo.svg',
-            icon: Radar,
-            iconClass: 'text-violet-500',
-            state: dataForSeo ? 'feeding' : 'not_configured',
-            connectable: false,
-          },
-        ]);
-      })
-      .catch(() => {
-        // Best effort: a status failure must never delay or break the
-        // suggestions themselves, so the panel simply stays hidden.
-        if (!cancelled) setSources([]);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [brandId]);
+  const sources = useMemo<Source[] | null>(() => {
+    if (states === undefined) return null;
+    // Best effort: a status failure must never delay or break the
+    // suggestions themselves, so the panel simply stays hidden.
+    if (states === null) return [];
+    const stateOf = (s: SourceStatus): SourceState =>
+      !s.configured
+        ? 'not_configured'
+        : !s.connected
+          ? 'not_connected'
+          : !s.mapped
+            ? 'connected_unmapped'
+            : s.firstDataAt
+              ? 'feeding'
+              : 'awaiting_data';
+    return [
+      {
+        key: 'gsc',
+        name: 'Google Search Console',
+        blurb: 'See query and impression data to find high-opportunity prompts.',
+        logo: '/google-search-console.svg',
+        icon: Search,
+        iconClass: 'text-blue-500',
+        state: stateOf(states.gsc),
+        connectable: true,
+      },
+      {
+        key: 'ga',
+        name: 'Google Analytics (GA4)',
+        blurb: 'Understand user intent and behaviour to uncover relevant prompts.',
+        logo: '/google-analytics.svg',
+        icon: BarChart3,
+        iconClass: 'text-amber-500',
+        state: stateOf(states.ga),
+        connectable: true,
+      },
+      {
+        key: 'dataforseo',
+        name: 'DataForSEO',
+        blurb: 'Uncover keyword and SERP data to find content gaps.',
+        logo: '/dataforseo.svg',
+        icon: Radar,
+        iconClass: 'text-violet-500',
+        state: states.dataForSeo.configured ? 'feeding' : 'not_configured',
+        connectable: false,
+      },
+    ];
+  }, [states]);
 
   const dismiss = useCallback(() => {
     setDismissed(true);
@@ -207,6 +218,11 @@ export function DataSourcesPanel({ brandId }: { brandId: string }) {
                 <span className="flex items-center gap-1.5 text-xs font-medium text-green-600 dark:text-green-400">
                   <Check className="h-3.5 w-3.5" />
                   {source.connectable ? 'Connected' : 'Enabled'}
+                </span>
+              ) : source.state === 'awaiting_data' ? (
+                <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <Clock className="h-3.5 w-3.5" />
+                  Connected · first sync in progress
                 </span>
               ) : !source.connectable ? null : (
                 <Link
