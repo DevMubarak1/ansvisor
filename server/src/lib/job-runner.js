@@ -71,7 +71,9 @@ export async function runTrackingJob(jobId, io) {
       job: proxy,
     });
 
-    await completeJob(jobId, result);
+    // The late-stamp promise is not job state; only the counts are stored.
+    const { lateStamp, ...stored } = result;
+    await completeJob(jobId, stored);
 
     if (io) {
       io.emit('tracking:complete', {
@@ -81,17 +83,17 @@ export async function runTrackingJob(jobId, io) {
       });
     }
 
-    // Daily Pulse (#540): fire-and-forget after a full daily run — never
-    // for immediate/manual runs or single-prompt refreshes. The engine is
-    // self-contained: eligibility checks, dedup and error handling inside.
-    //
-    // Skipped when the run wasn't stamped (#702). An unstamped run left the
-    // 24h anchor on the previous run, so the pulse would recompute that same
-    // window and mail figures the recipient already received — which is
-    // exactly what happened for three days on the largest brand. The catch-up
-    // sweep picks the day back up once a run does stamp.
-    if (!immediate && !promptId && !promptIds?.length) {
-      if (result?.stamped) {
+    const fullRun = !promptId && !promptIds?.length;
+
+    // What a full run's stamp sets off. The run may stamp now, or later once
+    // Cloro's late answers arrive (lib/run-settlement) — either way this runs
+    // exactly once, after the stamp, so it reads the finished window.
+    const afterStamp = () => {
+      if (!fullRun) return;
+      if (!immediate) {
+        // Daily Pulse (#540): after a full daily run only — never for manual
+        // runs or single-prompt refreshes. The engine is self-contained:
+        // eligibility checks, dedup and error handling inside.
         generatePulseForBrand(brandId).catch((err) => {
           logger.error({ err, brandId }, 'daily pulse trigger failed');
         });
@@ -107,21 +109,37 @@ export async function runTrackingJob(jobId, io) {
           logger.error({ err, brandId }, '[signals] pass failed — catch-up will retry');
         });
       } else {
-        logger.warn(
-          { brandId, resultCount: result?.resultCount },
-          'skipping daily pulse — tracking run was not stamped, window would be stale',
-        );
+        // A new brand's first run is a manual one, and passes otherwise wait
+        // for the night. It gets one now so the Action Center is not empty
+        // until tomorrow; the function is a no-op for a brand that already
+        // had one.
+        runFirstSignalPass(brandId).catch((err) => {
+          logger.error(
+            { err, brandId },
+            '[signals] first pass failed — the nightly pass will cover it',
+          );
+        });
       }
-    } else if (immediate && !promptId && !promptIds?.length && result?.stamped) {
-      // A new brand's first run is a manual one, and passes otherwise wait for
-      // the night. It gets one now so the Action Center is not empty until
-      // tomorrow; the function is a no-op for a brand that already had one.
-      runFirstSignalPass(brandId).catch((err) => {
-        logger.error(
-          { err, brandId },
-          '[signals] first pass failed — the nightly pass will cover it',
-        );
+    };
+
+    // Skipped when the run never stamps (#702). An unstamped run left the 24h
+    // anchor on the previous run, so the pulse would recompute that same
+    // window and mail figures the recipient already received. The catch-up
+    // sweep picks the day back up once a run does stamp.
+    if (result?.stamped) {
+      afterStamp();
+    } else if (lateStamp) {
+      lateStamp.then((stamped) => {
+        if (stamped) afterStamp();
+        else if (fullRun && !immediate) {
+          logger.warn({ brandId }, 'skipping daily pulse — tracking run never stamped');
+        }
       });
+    } else if (fullRun && !immediate) {
+      logger.warn(
+        { brandId, resultCount: result?.resultCount },
+        'skipping daily pulse — tracking run was not stamped, window would be stale',
+      );
     }
   } catch (err) {
     if (abortController.signal.aborted) {
