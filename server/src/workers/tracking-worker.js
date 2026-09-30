@@ -13,7 +13,7 @@ import { generateContentOpportunities } from '../lib/opportunity-generator.js';
 import { updateTargetUrlStats } from '../lib/target-url-stats.js';
 import { persistCitationRows } from '../lib/citation-rows.js';
 import { parseLocation, locationsForScraper } from '../lib/locations.js';
-import { refreshForCompletedRun } from '../lib/insights-rollups.js';
+import { settleTrackingRun } from '../lib/run-settlement.js';
 import logger from '../lib/logger.js';
 
 function resolveModelPlatform(model) {
@@ -855,71 +855,24 @@ export async function processTrackingJob({ brandId, promptId, promptIds, source,
     logger.error({ err, brandId }, 'failed to check opportunity generation eligibility');
   }
 
-  // Stamp the ledger row. The run's result count MUST come from the DB, not
-  // from `insertedCount`: in webhook mode the scraper results are inserted by
-  // the /cloro/callback handler, so the worker's own counter only sees the
-  // API-model phase — on scraper-only brands it stays 0 even after a fully
-  // successful run, and the first deploy of this ledger deleted every real
-  // run's row because of it. Zero results in the DB (every task genuinely
-  // failed) still deletes the row: completing it would swing the 24h anchor
-  // onto an empty window. On a count error we leave the row uncompleted —
-  // the dashboard keeps the previous completed run and the next run clears
-  // the dangling row.
-  let runStamped = false;
+  // Stamp the ledger row — or, when Cloro is still delivering, hand back a
+  // promise that stamps it once the late answers are in (lib/run-settlement).
+  // `stamped` / `lateStamp` gate the Daily Pulse and signal pass (#702): a
+  // run whose row never stamped did not move the 24h anchor, so its pulse
+  // would recompute the previous run's window and mail numbers the recipient
+  // already has.
+  const settlement = trackingRunId
+    ? await settleTrackingRun({
+        brandId,
+        runId: trackingRunId,
+        startedAt: trackingRunStartedAt,
+        plannedTasks: totalTasks,
+      })
+    : { stamped: false, lateStamp: null };
 
-  if (trackingRunId) {
-    const { count: runResultCount, error: countErr } = await supabaseAdmin
-      .from('prompt_results')
-      .select('id', { count: 'exact', head: true })
-      .eq('brand_id', brandId)
-      .gte('created_at', trackingRunStartedAt);
-
-    // Partial-run guard: a run that produced far fewer results than it
-    // planned tasks (Cloro delivered late/never) must not become the 24h
-    // anchor — a half-empty window reads as a visibility crash in the
-    // dashboard and the pulse mail. The ratio compares against THIS run's
-    // own planned task count, never against history, so a brand that
-    // legitimately shrinks its prompt set can't wedge the guard. Late
-    // results that land after the previous anchor stay visible in the next
-    // stamped window — nothing is lost, the anchor just refuses to move
-    // onto partial data.
-    const MIN_STAMP_RATIO = 0.5;
-    const isPartial = totalTasks > 0 && (runResultCount ?? 0) < totalTasks * MIN_STAMP_RATIO;
-
-    if (countErr) {
-      logger.error({ err: countErr, brandId, trackingRunId }, 'failed to count run results');
-    } else if ((runResultCount ?? 0) > 0 && !isPartial) {
-      const { error: stampErr } = await supabaseAdmin
-        .from('tracking_runs')
-        .update({ completed_at: new Date().toISOString(), result_count: runResultCount })
-        .eq('id', trackingRunId);
-      if (stampErr) {
-        logger.error({ err: stampErr, brandId, trackingRunId }, 'failed to stamp tracking run');
-      } else {
-        runStamped = true;
-        logger.info({ brandId, trackingRunId, runResultCount }, 'tracking run stamped');
-
-        // Fold the run's days into the Insights rollups (00066). Anchored to
-        // the stamp on purpose: a day enters the wide-window aggregates only
-        // once its run completed, so mid-run partial counts never show. Runs
-        // that never reach this point are picked up by the daily sweep.
-        // Best-effort inside — a refresh failure never unstamps the run.
-        await refreshForCompletedRun(brandId, trackingRunStartedAt);
-      }
-    } else if ((runResultCount ?? 0) > 0) {
-      logger.warn(
-        { brandId, trackingRunId, runResultCount, totalTasks },
-        'tracking run partial — below stamp ratio, row removed; window stays on previous run',
-      );
-      await supabaseAdmin.from('tracking_runs').delete().eq('id', trackingRunId);
-    } else {
-      logger.warn({ brandId, trackingRunId }, 'tracking run produced no results — row removed');
-      await supabaseAdmin.from('tracking_runs').delete().eq('id', trackingRunId);
-    }
-  }
-
-  // `stamped` gates the Daily Pulse (#702): a run whose ledger row was
-  // refused never moved the 24h anchor, so its pulse would recompute the
-  // previous run's window and mail numbers the recipient already has.
-  return { resultCount: insertedCount, stamped: runStamped };
+  return {
+    resultCount: insertedCount,
+    stamped: settlement.stamped,
+    lateStamp: settlement.lateStamp,
+  };
 }

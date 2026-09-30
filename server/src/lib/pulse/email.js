@@ -135,7 +135,7 @@ export function renderPulseEmail({ brandName, metrics, insightsUrl, settingsUrl 
     </tr>
     <tr>
       ${kpiCell('Positive sentiment', `${kpis.sentimentPct}%`, kpis.sentimentChange)}
-      ${kpiCell('Prompts covered', `${kpis.visiblePrompts}/${kpis.promptCount}`, null)}
+      ${kpiCell('Prompts you appear in', `${kpis.visiblePrompts}/${kpis.promptCount}`, null)}
     </tr>
   </table>
 
