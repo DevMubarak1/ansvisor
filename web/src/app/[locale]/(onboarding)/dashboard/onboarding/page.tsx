@@ -591,7 +591,7 @@ export default function OnboardingPage() {
       // Create brand if not already created
       if (!createdBrand) {
         // logo_url starts null — BrandAvatar derives the favicon at render time.
-        const brand = await createBrand({
+        const result = await createBrand({
           organizationId: orgId,
           name: brandName.trim(),
           description: description.trim() || undefined,
@@ -600,6 +600,11 @@ export default function OnboardingPage() {
           language,
           domains: domain ? [{ domain, isPrimary: true }] : [],
         });
+        if ('error' in result) {
+          toast.error(result.error);
+          return;
+        }
+        const { brand } = result;
 
         setCreatedBrand(brand);
         addBrand(brand);

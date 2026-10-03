@@ -2,7 +2,8 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
-import { enforceLimit } from '@/lib/guards/plan-guard';
+import { getOrgPlan } from '@/lib/guards/plan-guard';
+import { isWithinLimit } from '@/config/plans';
 import { slugify } from '@/lib/slug';
 import type { Brand, BrandDomain } from '@/types';
 
@@ -82,7 +83,14 @@ interface CreateBrandInput {
   domains: { domain: string; country?: string; isPrimary: boolean }[];
 }
 
-export async function createBrand(input: CreateBrandInput): Promise<Brand> {
+export type CreateBrandResult = { brand: Brand } | { error: string; code: 'plan_limit' };
+
+/**
+ * The plan limit comes back as a VALUE: production masks every error thrown
+ * from a server action, so a thrown PlanLimitError reached users as the
+ * meaningless digest message (same as #427 for prompts).
+ */
+export async function createBrand(input: CreateBrandInput): Promise<CreateBrandResult> {
   const supabase = await createClient();
 
   const { count } = await supabase
@@ -90,7 +98,14 @@ export async function createBrand(input: CreateBrandInput): Promise<Brand> {
     .select('id', { count: 'exact', head: true })
     .eq('organization_id', input.organizationId);
 
-  await enforceLimit(input.organizationId, 'maxBrands', count ?? 0);
+  const plan = await getOrgPlan(input.organizationId);
+  if (!isWithinLimit(plan, 'maxBrands', count ?? 0)) {
+    const max = plan.limits.maxBrands;
+    return {
+      code: 'plan_limit',
+      error: `Your plan includes ${max} brand${max === 1 ? '' : 's'}. Upgrade your plan to add more.`,
+    };
+  }
 
   const slug = slugify(input.name) || `brand-${Date.now()}`;
 
@@ -134,7 +149,7 @@ export async function createBrand(input: CreateBrandInput): Promise<Brand> {
   }
 
   revalidatePath('/dashboard/brands');
-  return mapBrandRow(brand as Record<string, unknown>, insertedDomains);
+  return { brand: mapBrandRow(brand as Record<string, unknown>, insertedDomains) };
 }
 
 interface UpdateBrandInput {
