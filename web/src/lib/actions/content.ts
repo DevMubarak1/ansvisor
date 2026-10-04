@@ -1,7 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
-import type { ContentBrief, ContentOpportunity, WebhookConfig } from '@/types';
+import type { ContentBrief, ContentOpportunity, OpportunityBasket, WebhookConfig } from '@/types';
 import { API_BASE_URL } from '@/config/api';
 
 const AEO_SERVER_URL = API_BASE_URL;
@@ -154,6 +154,22 @@ export async function getOpportunity(id: string): Promise<ContentOpportunity> {
   const session = await getSession();
 
   const res = await fetch(`${AEO_SERVER_URL}/api/content/${id}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Server error: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+export async function getOpportunityBasket(id: string): Promise<OpportunityBasket> {
+  const session = await getSession();
+
+  const res = await fetch(`${AEO_SERVER_URL}/api/content/${id}/basket`, {
     method: 'GET',
     headers: { Authorization: `Bearer ${session.access_token}` },
   });

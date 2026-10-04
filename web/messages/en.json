@@ -1693,7 +1693,22 @@
       "webhookStatus": "Webhook Status",
       "notSentYet": "Not sent to any workflow yet.",
       "sentAt": "Sent at {date}",
-      "webhookResponse": "Webhook Response"
+      "webhookResponse": "Webhook Response",
+      "topCompetitor": "Strongest Competitor",
+      "basketTitle": "Opportunity Basket",
+      "basketSummary": "{prompts, plural, one {# prompt} other {# prompts}} · {included} searches included · {excluded} excluded",
+      "basketIncluded": "Searches AI engines ran for these prompts",
+      "basketShowExcluded": "Show {count} excluded searches",
+      "basketHideExcluded": "Hide excluded searches",
+      "scoreTitle": "Why This Score",
+      "scoreWeight": "{weight}% of score",
+      "scoreWindow": "Measured over the last {days} days.",
+      "score": {
+        "demand": "Demand",
+        "visibilityGap": "Visibility gap",
+        "competitorGap": "Competitor gap",
+        "intent": "Intent"
+      }
     },
     "webhook": {
       "title": "Webhook Settings",
