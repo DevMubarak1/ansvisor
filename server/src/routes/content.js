@@ -27,6 +27,7 @@ function mapOpportunityRow(row) {
     id: row.id,
     brandId: row.brand_id,
     promptId: row.prompt_id,
+    clusterId: row.cluster_id ?? null,
     title: row.title,
     description: row.description,
     type: row.type,
@@ -808,6 +809,17 @@ export async function generateBriefForOpportunity(opportunityId, { force = false
 
   const sourceData = opportunity.source_data || {};
 
+  // A cluster opportunity (#857) answers several prompts: the brief treats
+  // them as the questions the piece must answer, and the searches AI engines
+  // ran for them as the related searches to cover.
+  const clusterContext = sourceData.prompts?.length
+    ? `
+Questions this content must answer (the cluster's prompts):
+${sourceData.prompts.map((p) => `- ${p}`).join('\n')}
+Searches AI engines ran while answering them: ${(sourceData.queries?.top || []).map((q) => q.query).join('; ') || 'none recorded'}
+`
+    : '';
+
   const userPrompt = `Brand: ${brand?.name || 'Unknown'}
 Industry: ${brand?.industry || 'Not specified'}
 Description: ${brand?.description || 'N/A'}
@@ -822,7 +834,7 @@ Opportunity:
 - Score: ${opportunity.opportunity_score}
 
 Related Prompt: "${promptText}"
-Intent: ${sourceData.intent || 'unknown'}
+${clusterContext}Intent: ${sourceData.intent || 'unknown'}
 Est. AI Volume: ${sourceData.estAiVolume || 0}/mo
 Current Visibility: ${sourceData.visibilityScore || 0}%
 Competitor Gap: ${sourceData.competitorGap || 0}%
@@ -954,6 +966,65 @@ router.post('/:id/brief', async (req, res) => {
  * GET /api/content/:id
  * Get a single opportunity by ID.
  */
+router.get('/:id/basket', async (req, res) => {
+  try {
+    const opp = await assertOpportunityAccess(req.params.id, req.user.id);
+    const clusterIds = [opp.cluster_id, ...(opp.related_cluster_ids || [])].filter(Boolean);
+    if (!clusterIds.length) return res.json({ clusters: [], queries: [] });
+
+    const [clustersRes, membersRes, queriesRes] = await Promise.all([
+      supabaseAdmin
+        .from('prompt_clusters')
+        .select('id, label, primary_intent, topics(name)')
+        .in('id', clusterIds),
+      supabaseAdmin
+        .from('prompt_cluster_members')
+        .select('cluster_id, prompts(id, text)')
+        .in('cluster_id', clusterIds),
+      supabaseAdmin
+        .from('prompt_cluster_queries')
+        .select('query, times_searched, included, reason')
+        .in('cluster_id', clusterIds),
+    ]);
+    const failed = clustersRes.error || membersRes.error || queriesRes.error;
+    if (failed) throw new Error(failed.message);
+
+    // A query searched for several of the opportunity's clusters is listed once.
+    const queries = new Map();
+    for (const q of queriesRes.data || []) {
+      const prior = queries.get(q.query);
+      queries.set(q.query, {
+        query: q.query,
+        timesSearched: (prior?.timesSearched || 0) + q.times_searched,
+        included: prior?.included || false || q.included,
+        reason: prior?.included ? prior.reason : q.reason,
+      });
+    }
+
+    return res.json({
+      clusters: clusterIds
+        .map((id) => (clustersRes.data || []).find((c) => c.id === id))
+        .filter(Boolean)
+        .map((c) => ({
+          id: c.id,
+          label: c.label,
+          need: c.primary_intent,
+          topicName: c.topics?.name ?? null,
+          prompts: (membersRes.data || [])
+            .filter((m) => m.cluster_id === c.id && m.prompts)
+            .map((m) => ({ id: m.prompts.id, text: m.prompts.text })),
+        })),
+      queries: [...queries.values()].sort((a, b) => b.timesSearched - a.timesSearched),
+    });
+  } catch (error) {
+    req.log.error({ err: error }, 'get opportunity basket error');
+    return res.status(error.status || 500).json({
+      error: 'Failed to get opportunity basket',
+      details: error.message,
+    });
+  }
+});
+
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;

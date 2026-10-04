@@ -35,6 +35,7 @@ import {
 } from '@/lib/actions/content';
 import type { ContentBrief, ContentOpportunity } from '@/types';
 import { getPromptFanout, type FanoutSubQuery } from '@/lib/actions/fanout';
+import { OpportunityBasketCard, ScoreBreakdown } from '@/components/content/opportunity-basket';
 import { toast } from 'sonner';
 
 const IMPACT_COLORS: Record<string, string> = {
@@ -103,7 +104,8 @@ export default function ContentDetailPage() {
       .then((opp) => {
         setOpportunity(opp);
         if (opp.brief) setBrief(opp.brief);
-        if (opp.brandId && opp.promptId) {
+        // A cluster opportunity shows its whole basket instead (#857).
+        if (opp.brandId && opp.promptId && !opp.clusterId) {
           getPromptFanout(opp.brandId, opp.promptId)
             .then((d) => setFanoutQueries(d.subQueries))
             .catch(() => setFanoutQueries([]));
@@ -265,13 +267,22 @@ export default function ContentDetailPage() {
         </span>
       </div>
 
+      {opportunity.clusterId && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <OpportunityBasketCard opportunityId={opportunity.id} />
+          </div>
+          <ScoreBreakdown sourceData={sd} />
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">{t('detail.sourceData')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {sd.promptText && (
+            {sd.promptText && !opportunity.clusterId && (
               <StatCard icon={Search} label={t('detail.relatedPrompt')} value={sd.promptText} />
             )}
 
@@ -295,6 +306,13 @@ export default function ContentDetailPage() {
                   icon={Users}
                   label={t('detail.competitorGap')}
                   value={`${sd.competitorGap > 0 ? '+' : ''}${Math.round(sd.competitorGap)}%`}
+                />
+              )}
+              {sd.topCompetitorVisibility !== undefined && (
+                <StatCard
+                  icon={Users}
+                  label={t('detail.topCompetitor')}
+                  value={`${Math.round(sd.topCompetitorVisibility)}%`}
                 />
               )}
               {sd.intent && (

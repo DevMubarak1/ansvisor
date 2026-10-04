@@ -241,7 +241,8 @@ Write every reason in ${getLanguageName(brand.language)}.`,
 
 // ─── Reads and writes ────────────────────────────────────────────────────────
 
-async function loadClusters(brandId) {
+/** A brand's clusters with their member prompt ids. */
+export async function loadClusters(brandId) {
   const { data: clusters, error } = await supabaseAdmin
     .from('prompt_clusters')
     .select('id, topic_id, label, primary_intent')

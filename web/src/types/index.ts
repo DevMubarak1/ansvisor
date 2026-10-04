@@ -188,6 +188,35 @@ export interface ContentOpportunitySourceData {
   intent?: string;
   keywords?: string[];
   competitorsCited?: string[];
+  // Cluster opportunities (#857).
+  clusterLabel?: string;
+  topicName?: string | null;
+  relatedTopics?: (string | null)[];
+  prompts?: string[];
+  topCompetitorVisibility?: number;
+  queries?: {
+    included: number;
+    excluded: number;
+    top: { query: string; timesSearched: number }[];
+  };
+  scoreComponents?: {
+    demand: number;
+    visibilityGap: number;
+    competitorGap: number;
+    intent: number;
+  };
+  windowDays?: number;
+}
+
+export interface OpportunityBasket {
+  clusters: {
+    id: string;
+    label: string;
+    need: string;
+    topicName: string | null;
+    prompts: { id: string; text: string }[];
+  }[];
+  queries: { query: string; timesSearched: number; included: boolean; reason: string }[];
 }
 
 export interface ContentBrief {
@@ -204,6 +233,7 @@ export interface ContentOpportunity {
   id: string;
   brandId: string;
   promptId?: string;
+  clusterId?: string | null;
   title: string;
   description?: string;
   type: ContentOpportunityType;
