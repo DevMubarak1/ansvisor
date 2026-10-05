@@ -64,14 +64,11 @@ test('multiple rows are joined by newline', () => {
 
 test('string values starting with formula injection triggers get prefixed with single quote', () => {
   const result = toCsv(
-    [
-      { formula: '=1+1', plus: '+cmd', minus: '-calc', at: '@user', tab: '\ttab', cr: '\rline' },
-    ],
+    [{ formula: '=1+1', plus: '+cmd', minus: '-calc', at: '@user', tab: '\ttab', cr: '\rline' }],
     ['formula', 'plus', 'minus', 'at', 'tab', 'cr'],
   );
   expect(result).toBe(
-    'formula,plus,minus,at,tab,cr\n' +
-      "'=1+1,'+cmd,'-calc,'@user,'\ttab,\"'\rline\"",
+    'formula,plus,minus,at,tab,cr\n' + "'=1+1,'+cmd,'-calc,'@user,'\ttab,\"'\rline\"",
   );
 });
 
@@ -84,4 +81,3 @@ test('negative numbers remain untouched as numeric values', () => {
   const result = toCsv([{ score: -3.2, rank: -5 }], ['score', 'rank']);
   expect(result).toBe('score,rank\n-3.2,-5');
 });
-
